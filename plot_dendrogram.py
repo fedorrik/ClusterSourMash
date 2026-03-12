@@ -47,17 +47,26 @@ thr = args.threshold if args.threshold is not None else 0.7 * Z[:, 2].max()
 # Dendrogram
 print("  Plotting dendrogram →", args.dendrogram_out, f"(size: {dw}x{dh} in)")
 plt.figure(figsize=(dw, dh))
-dendrogram(Z, labels=M.index.tolist(), color_threshold=thr, leaf_rotation=90)
+dendr = dendrogram(Z, labels=M.index.tolist(), color_threshold=thr, leaf_rotation=90)
 if args.no_axis:
 	plt.gca().axis('off')
-plt.savefig(args.dendrogram_out, bbox_inches="tight", dpi=100)
+plt.savefig(args.dendrogram_out, bbox_inches="tight", dpi=200)
 plt.close()
+
+# save order of names and clusters
+print("  Saving sample order and cluster assignments →", args.dendrogram_out + ".clusters")
+ordered_samples = [M.index[i] for i in dendr['leaves']]
+ordered_clusters = dendr['color_list']
+with open(args.dendrogram_out + ".clusters", "w") as f:
+    for sample, cluster in zip(ordered_samples, ordered_clusters):
+        f.write(f"{sample}\t{cluster}\n")
 
 # Clustermap (optional)
 if not args.skip_clustermap:
     print("  Plotting clustermap →", args.clustermap_out, f"(size: {cs}x{cs} in)")
-    sns.clustermap(M, row_linkage=Z, col_linkage=Z, figsize=(cs, cs),
+    g = sns.clustermap(M, row_linkage=Z, col_linkage=Z, figsize=(cs, cs),
                    cmap="vlag", annot=False, fmt=".2f", annot_kws={"size": 0})
-    plt.savefig(args.clustermap_out, bbox_inches="tight", dpi=100)
+    g.ax_heatmap.set_ylabel('')
+    plt.savefig(args.clustermap_out, bbox_inches="tight", dpi=200)
     plt.close()
 print("  Done.")

@@ -21,8 +21,10 @@ fi
 
 # Directory with FASTA files (.fa)
 input_dir=$1
+# filename ending
+filename_ending=$2
 # Number of parallel jobs (default: 8)
-N_JOBS=${2:-8}
+N_JOBS=${3:-8}
 
 # Directory where this script lives (for Python scripts)
 # Doesn't work with slurm
@@ -34,13 +36,13 @@ mkdir -p "$output_dir"
 echo "Creating sourmash abundance-aware signatures in parallel (jobs: $N_JOBS)..."
 
 # Find all .fa files and process them in parallel
-find "$input_dir" -maxdepth 1 -type f -name '*.fa' -print0 \
+find "$input_dir" -maxdepth 1 -type f -name "*${filename_ending}" -print0 \
   | xargs -0 -P "$N_JOBS" -I {} bash -c '
       file="$1"
       sourmash_exec="$2"
       output_dir="$3"
 
-      base_name=$(basename "$file" .fa)
+      base_name=$(basename "$file" ${filename_ending})
       echo "  -> $base_name"
 
       "$sourmash_exec" sketch dna -f -p k=21,scaled=1,abund \
@@ -55,7 +57,7 @@ echo "Pairwise comparison completed. Matrix saved to pairwise_matrix.txt"
 
 # Reformat pairwise_matrix.txt (in-place, via your script)
 echo "Reformatting matrix..."
-python3 "$script_dir/reformat_matrix.py" pairwise_matrix.txt
+python3 "$script_dir/reformat_matrix.py" pairwise_matrix.txt ${filename_ending}
 echo "Matrix reformatted and saved to pairwise_matrix.txt"
 
 # Plot dendrogram
