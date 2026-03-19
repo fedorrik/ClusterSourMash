@@ -1,70 +1,211 @@
 #!/bin/bash
 
 #SBATCH --job-name=ClusterSourMash
-#SBATCH --partition=short
-#SBATCH --time=1:00:00
+#SBATCH --partition=medium
+#SBATCH --time=12:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 
-
 set -euo pipefail
 
-# Path to sourmash executable (change if needed)
-sourmash_exec=sourmash
+sourmash_exec=${SOURMASH_EXEC:-sourmash}
+#script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 script_dir=/private/home/fryabov/soft/ClusterSourMash
 
-if [[ $# -lt 1 ]]; then
-    echo "Usage: $0 <input_dir_with_fasta> [N_JOBS]"
+usage() {
+    cat <<USAGE
+Usage:
+  $0 --input-dir DIR --suffix SUFFIX [options]
+
+Required:
+  -i, --input-dir DIR          Directory with FASTA files
+  -x, --suffix SUFFIX          File suffix to match and strip, e.g. .fa or .fasta
+
+Optional:
+  -j, --jobs INT               Parallel jobs [default: 8]
+  -n, --n-support INT          Number of support replicates [default: 0]
+  -s, --test-scaled INT        scaled value for support replicate sketches [default: 2]
+  -t, --support-min-hight INT      Annotate support only for branches with y >= this value [default: 0.0]
+  -p, --plot-support-dendrograms
+                               Also draw a dendrogram for every support matrix
+  -h, --help                   Show this help
+
+Outputs always:
+  pairwise_matrix.txt
+  dendrogram.png
+  clustermap.png
+
+If --n-support > 0, also writes:
+  sourmash_support_matrices/rep_XXXX.tsv
+  support_matrix_comparison/
+    support_matrix_variation.mean.tsv
+    support_matrix_variation.std.tsv
+    support_matrix_variation.cv.tsv
+    support_matrix_variation.std.clustermap.png
+    support_matrix_variation.cv.clustermap.png
+  dendrogram.png.support.tsv
+USAGE
+}
+
+input_dir=""
+filename_ending=""
+N_JOBS=8
+N_SUPPORT=0
+TEST_SCALED=2
+SUPPORT_MIN_HIGHT=0
+PLOT_SUPPORT_DENDROGRAMS=0
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -i|--input-dir)
+            input_dir="$2"; shift 2 ;;
+        -x|--suffix)
+            filename_ending="$2"; shift 2 ;;
+        -j|--jobs)
+            N_JOBS="$2"; shift 2 ;;
+        -n|--n-support)
+            N_SUPPORT="$2"; shift 2 ;;
+        -s|--test-scaled)
+            TEST_SCALED="$2"; shift 2 ;;
+        -t|--support-min-hight)
+            SUPPORT_MIN_HIGHT="$2"; shift 2 ;;
+        -p|--plot-support-dendrograms)
+            PLOT_SUPPORT_DENDROGRAMS=1; shift ;;
+        -h|--help)
+            usage; exit 0 ;;
+        *)
+            echo "Unknown argument: $1" >&2
+            usage
+            exit 1 ;;
+    esac
+done
+
+if [[ -z "$input_dir" || -z "$filename_ending" ]]; then
+    usage
+    exit 1
+fi
+if [[ ! -d "$input_dir" ]]; then
+    echo "Error: input directory not found: $input_dir" >&2
+    exit 1
+fi
+if ! [[ "$N_JOBS" =~ ^[0-9]+$ ]] || [[ "$N_JOBS" -lt 1 ]]; then
+    echo "Error: --jobs must be a positive integer." >&2
+    exit 1
+fi
+if ! [[ "$N_SUPPORT" =~ ^[0-9]+$ ]] || [[ "$N_SUPPORT" -lt 0 ]]; then
+    echo "Error: --n-support must be a non-negative integer." >&2
+    exit 1
+fi
+if ! [[ "$TEST_SCALED" =~ ^[0-9]+$ ]] || [[ "$TEST_SCALED" -lt 1 ]]; then
+    echo "Error: --test-scaled must be a positive integer." >&2
+    exit 1
+fi
+if [[ -n "$SUPPORT_MIN_HIGHT" ]] && { ! [[ "$SUPPORT_MIN_HIGHT" =~ ^[0-9]+$ ]] || [[ "$SUPPORT_MIN_HIGHT" -lt 1 ]]; }; then
+    echo "Error: --support-min-hight must be a positive integer." >&2
     exit 1
 fi
 
-# Directory with FASTA files (.fa)
-input_dir=$1
-# filename ending
-filename_ending=$2
-# Number of parallel jobs (default: 8)
-N_JOBS=${3:-8}
+for req in "$script_dir/reformat_matrix.py" "$script_dir/plot_dendrogram.py"; do
+    if [[ ! -f "$req" ]]; then
+        echo "Error: required script not found: $req" >&2
+        exit 1
+    fi
+done
+if [[ "$N_SUPPORT" -gt 0 && ! -f "$script_dir/compare_support_matrices.py" ]]; then
+    echo "Error: required script not found: $script_dir/compare_support_matrices.py" >&2
+    exit 1
+fi
 
-# Directory where this script lives (for Python scripts)
-# Doesn't work with slurm
-# script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+mapfile -d '' fasta_files < <(find "$input_dir" -maxdepth 1 -type f -name "*${filename_ending}" -print0 | sort -z)
+if [[ ${#fasta_files[@]} -eq 0 ]]; then
+    echo "Error: no files matching *${filename_ending} found in $input_dir" >&2
+    exit 1
+fi
 
-output_dir="output"
-mkdir -p "$output_dir"
+main_sig_dir="sourmash_sig_scaled1"
+support_dir="sourmash_support_matrices"
+comparison_dir="support_matrix_comparison"
+main_matrix="pairwise_matrix.txt"
 
-echo "Creating sourmash abundance-aware signatures in parallel (jobs: $N_JOBS)..."
+rm -rf "$main_sig_dir" "$support_dir" "$comparison_dir"
+mkdir -p "$main_sig_dir"
+rm -f "$main_matrix" dendrogram.png clustermap.png dendrogram.png.clusters dendrogram.png.support.tsv
 
-# Find all .fa files and process them in parallel
-find "$input_dir" -maxdepth 1 -type f -name "*${filename_ending}" -print0 \
-  | xargs -0 -P "$N_JOBS" -I {} bash -c '
-      file="$1"
-      sourmash_exec="$2"
-      output_dir="$3"
+echo "Found ${#fasta_files[@]} input files"
+echo "Sketching main signatures with scaled=1 (jobs: $N_JOBS)"
+export sourmash_exec main_sig_dir filename_ending
+printf '%s\0' "${fasta_files[@]}" | \
+  xargs -0 -P "$N_JOBS" -n 1 bash -c '
+    file="$1"
+    base_name=$(basename "$file")
+    base_name=${base_name%"$filename_ending"}
+    echo "  -> $base_name"
+    "$sourmash_exec" sketch dna -f -p "k=21,scaled=1,abund" -o "$main_sig_dir/$base_name.sig" "$file" 2>> sourmash.log
+  ' _
 
-      base_name=$(basename "$file" ${filename_ending})
-      echo "  -> $base_name"
+echo "Calculating pairwise matrix from scaled=1 signatures"
+"$sourmash_exec" compare "$main_sig_dir"/*.sig --csv "$main_matrix" >> sourmash.log 2>> sourmash.log
 
-      "$sourmash_exec" sketch dna -f -p k=21,scaled=1,abund \
-        -o "$output_dir/$base_name.sig" "$file" 2>/dev/null
-    ' _ {} "$sourmash_exec" "$output_dir"
-
-echo "Calculating pairwise distances with sourmash (abundance-aware)..."
-
-"$sourmash_exec" compare "$output_dir"/*.sig --csv pairwise_matrix.txt > /dev/null 2> /dev/null
-
-echo "Pairwise comparison completed. Matrix saved to pairwise_matrix.txt"
-
-# Reformat pairwise_matrix.txt (in-place, via your script)
-echo "Reformatting matrix..."
+echo "Reformatting main matrix"
 python3 "$script_dir/reformat_matrix.py" pairwise_matrix.txt ${filename_ending}
-echo "Matrix reformatted and saved to pairwise_matrix.txt"
 
-# Plot dendrogram
-echo "Plotting dendrogram..."
-python3 "$script_dir/plot_dendrogram.py" pairwise_matrix.txt
+plot_cmd=(python3 "$script_dir/plot_dendrogram.py" "$main_matrix" \
+  --dendrogram-out dendrogram.png \
+  --clustermap-out clustermap.png)
 
-# Cleanup temporary signatures
-rm -r "$output_dir"
+if [[ "$N_SUPPORT" -gt 0 ]]; then
+    mkdir -p "$support_dir"
+    echo "Running $N_SUPPORT support replicate analyses with scaled=$TEST_SCALED"
+    export TEST_SCALED filename_ending sourmash_exec
 
-echo "All done."
+    for rep in $(seq 1 "$N_SUPPORT"); do
+        seed=$((4342 + rep))
+        rep_tag=$(printf 'rep_%04d' "$rep")
+        rep_matrix="$support_dir/${rep_tag}.tsv"
+        rep_sig_dir=$(mktemp -d "${TMPDIR:-/tmp}/sourmash_${rep_tag}_XXXXXX")
+
+        echo "[$rep_tag] sketching with seed=$seed"
+        export rep_sig_dir seed
+        printf '%s\0' "${fasta_files[@]}" | \
+          xargs -0 -P "$N_JOBS" -n 1 bash -c '
+            file="$1"
+            base_name=$(basename "$file")
+            base_name=${base_name%"$filename_ending"}
+            "$sourmash_exec" sketch dna -f -p "k=21,scaled=$TEST_SCALED,seed=$seed,abund" -o "$rep_sig_dir/$base_name.sig" "$file" 2>> sourmash.log
+          ' _
+
+        echo "[$rep_tag] comparing signatures"
+        "$sourmash_exec" compare "$rep_sig_dir"/*.sig --csv "$rep_matrix" >> sourmash.log 2>> sourmash.log
+
+        echo "[$rep_tag] reformatting matrix"
+        python3 "$script_dir/reformat_matrix.py" "$rep_matrix" ${filename_ending}
+
+        rm -rf "$rep_sig_dir"
+    done
+
+    echo "Comparing support matrices"
+    python3 "$script_dir/compare_support_matrices.py" \
+      --bootstrap-dir "$support_dir" \
+      --reference-matrix "$main_matrix" \
+      --out-dir "$comparison_dir" \
+      --prefix support_matrix_variation \
+      --mask-diagonal
+
+    plot_cmd+=(--support-dir "$support_dir")
+    if [[ -n "$SUPPORT_MIN_HIGHT" ]]; then
+        plot_cmd+=(--support-min-height "$SUPPORT_MIN_HIGHT")
+    fi
+    if [[ "$PLOT_SUPPORT_DENDROGRAMS" -eq 1 ]]; then
+        plot_cmd+=(--plot-support-dendrograms)
+    fi
+else
+    echo "--n-support not provided or zero: main matrix only"
+fi
+
+echo "Plotting main dendrogram and clustermap"
+"${plot_cmd[@]}"
+
+rm -r sourmash_sig_scaled1/
+
+echo "All done"
