@@ -9,8 +9,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from scipy.cluster.hierarchy import dendrogram, linkage
+from scipy.cluster.hierarchy import dendrogram, linkage, fcluster
 from scipy.spatial.distance import squareform
+
 
 
 def read_matrix(path: str) -> pd.DataFrame:
@@ -107,9 +108,10 @@ def annotate_support(ax, dendr, support_pct, nodes, min_height=0.0, fontsize=9):
         ax.text(x, y, f"{int(round(support))}", ha='center', va='bottom', fontsize=fontsize)
 
 
-def save_clusters_file(path, dendr, m):
+def save_clusters_file(path, dendr, m, Z, threshold):
+    clusters = fcluster(Z, t=threshold, criterion='distance')
     ordered_samples = [m.index[i] for i in dendr['leaves']]
-    ordered_clusters = dendr['color_list']
+    ordered_clusters = [clusters[i] for i in dendr['leaves']]
     with open(path, 'w') as out:
         for sample, cluster in zip(ordered_samples, ordered_clusters):
             out.write(f"{sample}\t{cluster}\n")
@@ -213,7 +215,7 @@ if __name__ == '__main__':
     fig.savefig(args.dendrogram_out, bbox_inches='tight', dpi=200)
     plt.close(fig)
 
-    save_clusters_file(args.dendrogram_out + '.clusters', dendr, m)
+    save_clusters_file(args.dendrogram_out + '.clusters', dendr, m, z, thr)
     print('  Saved cluster order →', args.dendrogram_out + '.clusters')
 
     if not args.skip_clustermap:
