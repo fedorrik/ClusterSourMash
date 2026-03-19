@@ -1,0 +1,6 @@
+n_support_matrices	3
+n_samples	28
+mean_sd	0.00329386
+max_sd	0.00660047
+mean_cv	0.02548812
+max_cv	0.04761832

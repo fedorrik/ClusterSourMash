@@ -20,8 +20,6 @@ def read_matrix(path: str) -> pd.DataFrame:
         sys.exit(f"Failed to read matrix '{path}': {e}")
     if m.shape[0] != m.shape[1]:
         sys.exit(f"Matrix '{path}' must be square.")
-    if list(m.index) != list(m.columns):
-        sys.exit(f"Row/column labels must match and be in same order in '{path}'.")
     return m.apply(pd.to_numeric)
 
 

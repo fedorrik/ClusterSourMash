@@ -22,8 +22,8 @@ def read_matrix(path: str) -> pd.DataFrame:
     df = df.set_index('sample')
     if df.shape[0] != df.shape[1]:
         raise ValueError(f"{path}: matrix must be square, got {df.shape}")
-    if list(df.index) != list(df.columns):
-        raise ValueError(f"{path}: row/column labels must match and be in same order")
+    #if list(df.index) != list(df.columns):
+    #    raise ValueError(f"{path}: row/column labels must match and be in same order")
     try:
         df = df.apply(pd.to_numeric)
     except Exception as e:

@@ -101,8 +101,13 @@ if ! [[ "$TEST_SCALED" =~ ^[0-9]+$ ]] || [[ "$TEST_SCALED" -lt 1 ]]; then
     echo "Error: --test-scaled must be a positive integer." >&2
     exit 1
 fi
-if [[ -n "$SUPPORT_MIN_HIGHT" ]] && { ! [[ "$SUPPORT_MIN_HIGHT" =~ ^[0-9]+$ ]] || [[ "$SUPPORT_MIN_HIGHT" -lt 1 ]]; }; then
-    echo "Error: --support-min-hight must be a positive integer." >&2
+if [[ -n "$SUPPORT_MIN_HIGHT" ]] && ! awk -v x="$SUPPORT_MIN_HIGHT" '
+       BEGIN {
+           exit !(x ~ /^([0-9]+(\.[0-9]*)?|\.[0-9]+)$/ && x >= 0 && x <= 1)
+       }
+   '
+then
+    echo "Error: --support-min-hight must be a number from 0 to 1." >&2
     exit 1
 fi
 
@@ -128,9 +133,9 @@ support_dir="sourmash_support_matrices"
 comparison_dir="support_matrix_comparison"
 main_matrix="pairwise_matrix.txt"
 
-rm -rf "$main_sig_dir" "$support_dir" "$comparison_dir"
+rm -rf "$main_sig_dir" "$support_dir" "$comparison_dir" "$main_matrix"
 mkdir -p "$main_sig_dir"
-rm -f "$main_matrix" dendrogram.png clustermap.png dendrogram.png.clusters dendrogram.png.support.tsv
+#rm -f  dendrogram.png clustermap.png dendrogram.png.clusters dendrogram.png.support.tsv
 
 echo "Found ${#fasta_files[@]} input files"
 echo "Sketching main signatures with scaled=1 (jobs: $N_JOBS)"
