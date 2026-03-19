@@ -13,6 +13,6 @@ In `./ClusterSourMash.sh`, specify:
 ```bash
 ./ClusterSourMash.sh --help
 ```
-Dependencies: 
+## Dependencies: 
 - [sourmash](https://github.com/sourmash-bio/sourmash)
 - Python libraries [numpy, pandas, seaborn, matplotlib, scipy]
