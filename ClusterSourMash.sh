@@ -5,7 +5,7 @@
 #SBATCH --time=12:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=32
 
 set -euo pipefail
 
@@ -146,7 +146,7 @@ printf '%s\0' "${fasta_files[@]}" | \
     base_name=$(basename "$file")
     base_name=${base_name%"$filename_ending"}
     echo "  -> $base_name"
-    "$sourmash_exec" sketch dna -f -p "k=21,scaled=1,abund" -o "$main_sig_dir/$base_name.sig" "$file" 2>> sourmash.log
+    "$sourmash_exec" sketch dna -f -p "k=31,scaled=1,abund" -o "$main_sig_dir/$base_name.sig" "$file" 2>> sourmash.log
   ' _
 
 echo "Calculating pairwise matrix from scaled=1 signatures"
@@ -177,7 +177,7 @@ if [[ "$N_SUPPORT" -gt 0 ]]; then
             file="$1"
             base_name=$(basename "$file")
             base_name=${base_name%"$filename_ending"}
-            "$sourmash_exec" sketch dna -f -p "k=21,scaled=$TEST_SCALED,seed=$seed,abund" -o "$rep_sig_dir/$base_name.sig" "$file" 2>> sourmash.log
+            "$sourmash_exec" sketch dna -f -p "k=31,scaled=$TEST_SCALED,seed=$seed,abund" -o "$rep_sig_dir/$base_name.sig" "$file" 2>> sourmash.log
           ' _
 
         echo "[$rep_tag] comparing signatures"
