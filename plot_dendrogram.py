@@ -6,10 +6,11 @@ import sys
 from collections import defaultdict
 
 import matplotlib.pyplot as plt
+from matplotlib.collections import LineCollection
 from matplotlib.cm import ScalarMappable
 from matplotlib.lines import Line2D
-from matplotlib.ticker import MaxNLocator
-from matplotlib.colors import Normalize
+from matplotlib.ticker import MaxNLocator, MultipleLocator
+from matplotlib.colors import Normalize, to_hex
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -225,33 +226,81 @@ def draw_sample_group_dots(ax, dendr, labels, group_colors, show_labels=True, fo
     ax.set_xticks([])
 
 
-def style_normal_axis(ax):
+def branch_group_color_func(z, labels, group_colors, mixed_color='black'):
+    clusters = clusters_from_linkage(z, labels)
+    color_by_node = {}
+    for node_id, leaves in clusters.items():
+        groups = {label.split('_')[-1] for label in leaves}
+        if len(groups) == 1:
+            color_by_node[node_id] = to_hex(group_colors[next(iter(groups))])
+        else:
+            color_by_node[node_id] = mixed_color
+    return lambda node_id: color_by_node.get(node_id, mixed_color)
+
+
+def color_terminal_leaf_branches(ax, dendr, labels, group_colors):
+    if not group_colors:
+        return
+
+    x_to_color = {}
+    for leaf_pos, leaf_idx in enumerate(dendr['leaves']):
+        sample = labels[leaf_idx]
+        group = sample.split('_')[-1]
+        x_to_color[5 + 10 * leaf_pos] = to_hex(group_colors[group])
+
+    segments = []
+    colors = []
+    for xs, ys in zip(dendr['icoord'], dendr['dcoord']):
+        for x0, y0, x1, y1 in ((xs[0], ys[0], xs[1], ys[1]), (xs[3], ys[3], xs[2], ys[2])):
+            if y0 == 0 and x0 == x1 and x0 in x_to_color:
+                segments.append([(x0, y0), (x1, y1)])
+                colors.append(x_to_color[x0])
+
+    if not segments:
+        return
+
+    linewidth = None
+    if ax.collections:
+        linewidths = ax.collections[0].get_linewidths()
+        if len(linewidths):
+            linewidth = linewidths[0]
+    ax.add_collection(LineCollection(segments, colors=colors, linewidths=linewidth, zorder=4))
+
+
+def style_normal_axis(ax, y_axis_step=None):
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
     ax.spines['bottom'].set_visible(False)
     ax.spines['left'].set_position(('outward', 3))
-    ax.yaxis.set_major_locator(MaxNLocator(nbins=12))
+    if y_axis_step is None:
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=12))
+    else:
+        ax.yaxis.set_major_locator(MultipleLocator(y_axis_step))
     ax.tick_params(axis='y', which='major', length=4)
 
 
-def add_sample_group_legend(fig, group_colors, show_labels=True):
+def add_sample_group_legend(fig, group_colors, show_labels=True, branch_colors=False):
     # If sample labels are drawn under the dots, the legend is redundant.
     # Keep the legend only for label-free plots, e.g. with --no-axis.
     if not group_colors or show_labels:
         return
-    handles = [
-        Line2D(
-            [0],
-            [0],
-            marker='o',
-            linestyle='None',
-            markerfacecolor=color,
-            markeredgecolor='none',
-            markersize=6,
-            label=group,
-        )
-        for group, color in sorted(group_colors.items())
-    ]
+    handles = []
+    for group, color in sorted(group_colors.items()):
+        if branch_colors:
+            handles.append(Line2D([0], [0], color=color, linewidth=2, label=group))
+        else:
+            handles.append(
+                Line2D(
+                    [0],
+                    [0],
+                    marker='o',
+                    linestyle='None',
+                    markerfacecolor=color,
+                    markeredgecolor='none',
+                    markersize=6,
+                    label=group,
+                )
+            )
     fig.legend(
         handles=handles,
         labels=[h.get_label() for h in handles],
@@ -266,18 +315,35 @@ def add_sample_group_legend(fig, group_colors, show_labels=True):
     )
 
 
-def draw_dendrogram(ax, z, labels, threshold, sample_group_colors=None, no_axis=False):
+def draw_dendrogram(
+    ax,
+    z,
+    labels,
+    threshold,
+    sample_group_colors=None,
+    no_axis=False,
+    no_labels=False,
+    color_branches_by_group=False,
+    y_axis_step=None,
+):
+    link_color_func = None
+    if color_branches_by_group:
+        link_color_func = branch_group_color_func(z, labels, sample_group_colors)
     dendr = dendrogram(
         z,
-        labels=None if sample_group_colors else labels,
-        color_threshold=threshold,
+        labels=None if sample_group_colors and not color_branches_by_group else labels,
+        color_threshold=None if color_branches_by_group else threshold,
         leaf_rotation=90,
-        no_labels=sample_group_colors is not None,
+        no_labels=no_labels or (sample_group_colors is not None and not color_branches_by_group),
+        link_color_func=link_color_func,
         ax=ax,
     )
-    draw_sample_group_dots(ax, dendr, labels, sample_group_colors, show_labels=not args.no_labels)
+    if color_branches_by_group:
+        color_terminal_leaf_branches(ax, dendr, labels, sample_group_colors)
+    if not color_branches_by_group:
+        draw_sample_group_dots(ax, dendr, labels, sample_group_colors, show_labels=not no_labels)
     if not no_axis:
-        style_normal_axis(ax)
+        style_normal_axis(ax, y_axis_step=y_axis_step)
     return dendr
 
 
@@ -290,15 +356,42 @@ def save_clusters_file(path, dendr, m, Z, threshold):
             out.write(f"{sample}\t{cluster}\n")
 
 
-def plot_single_dendrogram(m, out_path, threshold=None, no_axis=False, width=None, height=None, sample_group_colors=None):
+def plot_single_dendrogram(
+    m,
+    out_path,
+    threshold=None,
+    no_axis=False,
+    no_labels=False,
+    width=None,
+    height=None,
+    height_per_y_unit=None,
+    y_axis_step=None,
+    sample_group_colors=None,
+    color_branches_by_group=False,
+):
     n = m.shape[0]
     dw = width or max(int(round(0.15 * n)), 5)
-    dh = height or int(round(dw / 3))
     z = compute_linkage(m)
+    dh = height or (height_per_y_unit * z[:, 2].max() if height_per_y_unit is not None else int(round(dw / 3)))
     thr = threshold if threshold is not None else 0.7 * z[:, 2].max()
     fig, ax = plt.subplots(figsize=(dw, dh))
-    dendr = draw_dendrogram(ax, z, m.index.tolist(), thr, sample_group_colors=sample_group_colors, no_axis=no_axis)
-    add_sample_group_legend(fig, sample_group_colors, show_labels=not no_axis)
+    dendr = draw_dendrogram(
+        ax,
+        z,
+        m.index.tolist(),
+        thr,
+        sample_group_colors=sample_group_colors,
+        no_axis=no_axis,
+        no_labels=no_labels,
+        color_branches_by_group=color_branches_by_group,
+        y_axis_step=y_axis_step,
+    )
+    add_sample_group_legend(
+        fig,
+        sample_group_colors,
+        show_labels=not no_axis and not color_branches_by_group,
+        branch_colors=color_branches_by_group,
+    )
     if no_axis:
         ax.axis('off')
     fig.savefig(out_path, bbox_inches='tight', dpi=200)
@@ -351,7 +444,19 @@ def plot_heatmap(m, out_path, legend_out_path, leaf_order, size=None, no_axis=Fa
     plt.close(legend_fig)
 
 
-def plot_support_dendrograms(support_dir, labels, threshold=None, no_axis=False, width=None, height=None, sample_group_colors=None):
+def plot_support_dendrograms(
+    support_dir,
+    labels,
+    threshold=None,
+    no_axis=False,
+    no_labels=False,
+    width=None,
+    height=None,
+    height_per_y_unit=None,
+    y_axis_step=None,
+    sample_group_colors=None,
+    color_branches_by_group=False,
+):
     files = sorted(glob.glob(os.path.join(support_dir, '*.tsv')))
     if not files:
         sys.exit(f"No support matrices (*.tsv) found in '{support_dir}'.")
@@ -362,7 +467,19 @@ def plot_support_dendrograms(support_dir, labels, threshold=None, no_axis=False,
             sys.exit(f"Label mismatch in support matrix '{path}'.")
         stem = os.path.splitext(os.path.basename(path))[0]
         out_path = os.path.join(support_dir, f'{stem}.dendrogram.png')
-        plot_single_dendrogram(m, out_path, threshold=threshold, no_axis=no_axis, width=width, height=height, sample_group_colors=sample_group_colors)
+        plot_single_dendrogram(
+            m,
+            out_path,
+            threshold=threshold,
+            no_axis=no_axis,
+            no_labels=no_labels,
+            width=width,
+            height=height,
+            height_per_y_unit=height_per_y_unit,
+            y_axis_step=y_axis_step,
+            sample_group_colors=sample_group_colors,
+            color_branches_by_group=color_branches_by_group,
+        )
 
 
 if __name__ == '__main__':
@@ -377,6 +494,7 @@ if __name__ == '__main__':
     parser.add_argument('--support-fontsize', type=int, default=9, help='Font size for support labels.')
     parser.add_argument('--nwk', default=None, help='Write dendrogram tree to this Newick file. Internal nodes include support values when --support-dir is used.')
     parser.add_argument('--sample-group-colors', default=None, help="TSV with group names and RGB colors as group<TAB>R,G,B. Group names must match last parts of sample names split on '_' (sample.split('_')[-1]). Adds a color dot between each sample name and branch tip.")
+    parser.add_argument('--color-branches-by-group', action='store_true', help='Use --sample-group-colors to color dendrogram branches instead of drawing sample group dots. Mixed-group branches are black and threshold colors are ignored.')
     parser.add_argument('--plot-support-dendrograms', action='store_true', help='Also draw a dendrogram for each support matrix and save it into that same directory.')
     parser.add_argument('--threshold', type=float, default=None, help='Dendrogram color threshold; default=0.7*max(height).')
     parser.add_argument('--skip-heatmap', action='store_true', help='Skip heatmap drawing.')
@@ -385,6 +503,8 @@ if __name__ == '__main__':
     parser.add_argument('--no-labels', action='store_true', help='Hide labels.')
     parser.add_argument('--dendrogram-width', type=int, default=None, help='Dendrogram width in inches.')
     parser.add_argument('--dendrogram-height', type=int, default=None, help='Dendrogram height in inches.')
+    parser.add_argument('--dendrogram-height-per-y-unit', type=float, default=None, help='Set dendrogram height as this many inches per y-axis unit; ignored when --dendrogram-height is set. Example: value 10 with max height 0.5 gives a 5 inch figure.')
+    parser.add_argument('--y-axis-step', type=float, default=None, help='Fixed spacing between y-axis tick labels; default chooses ticks automatically.')
     parser.add_argument('--heatmap-size', type=int, default=None, help='Heatmap size in inches.')
     parser.add_argument('--clustermap-size', dest='heatmap_size', type=int, help=argparse.SUPPRESS)
     parser.add_argument('--heatmap-vmin', type=float, default=None, help='Heatmap color minimum; default is automatic.')
@@ -395,6 +515,12 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.heatmap_vmin is not None and args.heatmap_vmax is not None and args.heatmap_vmin >= args.heatmap_vmax:
         sys.exit('--heatmap-vmin must be smaller than --heatmap-vmax.')
+    if args.color_branches_by_group and args.sample_group_colors is None:
+        sys.exit('--color-branches-by-group requires --sample-group-colors.')
+    if args.dendrogram_height_per_y_unit is not None and args.dendrogram_height_per_y_unit <= 0:
+        sys.exit('--dendrogram-height-per-y-unit must be > 0.')
+    if args.y_axis_step is not None and args.y_axis_step <= 0:
+        sys.exit('--y-axis-step must be > 0.')
 
     m = read_matrix(args.matrix)
     sample_group_colors = None
@@ -427,17 +553,48 @@ if __name__ == '__main__':
         pd.DataFrame(rows).to_csv(out_tsv, sep='\t', index=False)
         print('  Saved branch support table →', out_tsv)
         if args.plot_support_dendrograms:
-            plot_support_dendrograms(args.support_dir, m.index.tolist(), threshold=args.threshold, no_axis=args.no_axis, width=args.dendrogram_width, height=args.dendrogram_height, sample_group_colors=sample_group_colors)
+            plot_support_dendrograms(
+                args.support_dir,
+                m.index.tolist(),
+                threshold=args.threshold,
+                no_axis=args.no_axis,
+                no_labels=args.no_labels,
+                width=args.dendrogram_width,
+                height=args.dendrogram_height,
+                height_per_y_unit=args.dendrogram_height_per_y_unit,
+                y_axis_step=args.y_axis_step,
+                sample_group_colors=sample_group_colors,
+                color_branches_by_group=args.color_branches_by_group,
+            )
 
     n = m.shape[0]
     dw = args.dendrogram_width or max(int(round(0.15 * n)), 5)
-    dh = args.dendrogram_height or int(round(dw / 3))
+    dh = args.dendrogram_height or (
+        args.dendrogram_height_per_y_unit * z[:, 2].max()
+        if args.dendrogram_height_per_y_unit is not None
+        else int(round(dw / 3))
+    )
     print('  Plotting dendrogram →', args.dendrogram_out)
     fig, ax = plt.subplots(figsize=(dw, dh))
-    dendr = draw_dendrogram(ax, z, m.index.tolist(), thr, sample_group_colors=sample_group_colors, no_axis=args.no_axis)
+    dendr = draw_dendrogram(
+        ax,
+        z,
+        m.index.tolist(),
+        thr,
+        sample_group_colors=sample_group_colors,
+        no_axis=args.no_axis,
+        no_labels=args.no_labels,
+        color_branches_by_group=args.color_branches_by_group,
+        y_axis_step=args.y_axis_step,
+    )
     if args.legend:
         print('  Adding sample group legend')
-        add_sample_group_legend(fig, sample_group_colors, show_labels=not args.no_axis)
+        add_sample_group_legend(
+            fig,
+            sample_group_colors,
+            show_labels=not args.no_axis and not args.color_branches_by_group,
+            branch_colors=args.color_branches_by_group,
+        )
     if support_pct:
         annotate_support(ax, dendr, support_pct, selected_nodes, min_height=args.support_min_height, fontsize=args.support_fontsize)
     if args.no_axis:
