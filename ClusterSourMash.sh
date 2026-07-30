@@ -122,7 +122,7 @@ if [[ "$N_SUPPORT" -gt 0 && ! -f "$script_dir/compare_support_matrices.py" ]]; t
     exit 1
 fi
 
-mapfile -d '' fasta_files < <(find "$input_dir" -maxdepth 1 -type f -name "*${filename_ending}" -print0 | sort -z)
+mapfile -d '' fasta_files < <(find -L "$input_dir" -maxdepth 1 -type f -name "*${filename_ending}" -print0 | sort -z)
 if [[ ${#fasta_files[@]} -eq 0 ]]; then
     echo "Error: no files matching *${filename_ending} found in $input_dir" >&2
     exit 1
