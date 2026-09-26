@@ -23,6 +23,7 @@ Required:
   -x, --suffix SUFFIX          File suffix to match and strip, e.g. .fa or .fasta
 
 Optional:
+  -k, --kmer-length INT        K-mer length [default: 31]
   -j, --jobs INT               Parallel jobs [default: 8]
   -n, --n-support INT          Number of support replicates [default: 0]
   -s, --test-scaled INT        scaled value for support replicate sketches [default: 2]
@@ -50,6 +51,7 @@ USAGE
 
 input_dir=""
 filename_ending=""
+KMER_LENGTH=31
 N_JOBS=8
 N_SUPPORT=0
 TEST_SCALED=2
@@ -62,6 +64,12 @@ while [[ $# -gt 0 ]]; do
             input_dir="$2"; shift 2 ;;
         -x|--suffix)
             filename_ending="$2"; shift 2 ;;
+        -k|--kmer-length)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: --kmer-length requires a positive integer." >&2
+                exit 1
+            fi
+            KMER_LENGTH="$2"; shift 2 ;;
         -j|--jobs)
             N_JOBS="$2"; shift 2 ;;
         -n|--n-support)
@@ -87,6 +95,10 @@ if [[ -z "$input_dir" || -z "$filename_ending" ]]; then
 fi
 if [[ ! -d "$input_dir" ]]; then
     echo "Error: input directory not found: $input_dir" >&2
+    exit 1
+fi
+if ! [[ "$KMER_LENGTH" =~ ^[0-9]+$ ]] || [[ "$KMER_LENGTH" =~ ^0+$ ]]; then
+    echo "Error: --kmer-length must be a positive integer." >&2
     exit 1
 fi
 if ! [[ "$N_JOBS" =~ ^[0-9]+$ ]] || [[ "$N_JOBS" -lt 1 ]]; then
@@ -139,14 +151,14 @@ mkdir -p "$main_sig_dir"
 
 echo "Found ${#fasta_files[@]} input files"
 echo "Sketching main signatures with scaled=1 (jobs: $N_JOBS)"
-export sourmash_exec main_sig_dir filename_ending
+export sourmash_exec main_sig_dir filename_ending KMER_LENGTH
 printf '%s\0' "${fasta_files[@]}" | \
   xargs -0 -P "$N_JOBS" -n 1 bash -c '
     file="$1"
     base_name=$(basename "$file")
     base_name=${base_name%"$filename_ending"}
     echo "  -> $base_name"
-    "$sourmash_exec" sketch dna -f -p "k=31,scaled=1,abund" -o "$main_sig_dir/$base_name.sig" "$file" 2>> sourmash.log
+    "$sourmash_exec" sketch dna -f -p "k=$KMER_LENGTH,scaled=1,abund" -o "$main_sig_dir/$base_name.sig" "$file" 2>> sourmash.log
   ' _
 
 echo "Calculating pairwise matrix from scaled=1 signatures"
@@ -177,7 +189,7 @@ if [[ "$N_SUPPORT" -gt 0 ]]; then
             file="$1"
             base_name=$(basename "$file")
             base_name=${base_name%"$filename_ending"}
-            "$sourmash_exec" sketch dna -f -p "k=31,scaled=$TEST_SCALED,seed=$seed,abund" -o "$rep_sig_dir/$base_name.sig" "$file" 2>> sourmash.log
+            "$sourmash_exec" sketch dna -f -p "k=$KMER_LENGTH,scaled=$TEST_SCALED,seed=$seed,abund" -o "$rep_sig_dir/$base_name.sig" "$file" 2>> sourmash.log
           ' _
 
         echo "[$rep_tag] comparing signatures"
